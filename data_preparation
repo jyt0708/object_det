@@ -1,0 +1,318 @@
+import os
+import shutil
+from collections import Counter, defaultdict
+from PIL import Image
+
+# Locount原文件路径
+label_train = r"Locount_ori\Locount_GtTxtsTrain"
+label_val = r"Locount_ori\Locount_GtTxtsTest"
+img_train = r"Locount_ori\Locount_ImagesTrain"
+img_val = r"Locount_ori\Locount_ImagesTest"
+
+# 过滤后数据路径
+label_train_new = r"Locount/labels/Train"
+label_val_new = r"Locount/labels/Val"
+img_train_new = r"Locount/images/Train"
+img_val_new = r"Locount/images/Val"
+
+
+# Step 1: 统计每个validation标签类别instance数
+train_counter = Counter()
+val_counter = Counter()
+
+def count_instances(label_folder, counter, name):
+    for i, txt_file in enumerate(os.listdir(label_folder), start=1):
+        if not txt_file.endswith('.txt'):
+            continue
+
+        file_path = os.path.join(label_folder, txt_file)
+        classes_in_file = set()
+
+        with open(file_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split(',')
+                if len(parts) < 5:
+                    continue
+                cls = parts[4]
+                classes_in_file.add(cls)
+
+        counter.update(classes_in_file)
+
+        if i % 1000 == 0:
+            print(f"Processed {i} files in {name}...")
+
+count_instances(label_train, train_counter, "train")
+count_instances(label_val, val_counter, "val")
+
+# 所有出现过的类别
+all_classes = set(train_counter.keys()) | set(val_counter.keys())
+
+# 先按阈值筛选
+filtered_classes = [
+    cls for cls in all_classes
+    if train_counter[cls] >= 150 and val_counter[cls] >= 50
+]
+
+# 按 train + val 总 instance 排序，取前 38
+filtered_classes = sorted(
+    filtered_classes,
+    key=lambda c: train_counter[c] + val_counter[c],
+    reverse=True
+)[:38]
+
+class_map = {cls_name: idx for idx, cls_name in enumerate(filtered_classes)}
+
+
+print("Selected classes (train >=150 & val >=50):")
+for cls in filtered_classes:
+    print(
+        f"{cls}: "
+        f"train={train_counter[cls]}, "
+        f"val={val_counter[cls]}, "
+        f"total={train_counter[cls] + val_counter[cls]}"
+    )
+    
+# 返回class_map
+print("Class map:", class_map)
+
+
+# Step 3: 标签转换函数 (YOLO格式)
+def convert_to_yolo(line, class_map, img_w, img_h):
+    parts = line.strip().split(',')
+    if len(parts) < 6:
+        return None
+    
+    x1, y1, x2, y2, cls, _ = parts
+    
+    if cls not in class_map:
+        return None
+    
+    x1, y1, x2, y2 = map(float, [x1, y1, x2, y2])
+    x_center = (x1 + x2) / 2 / img_w
+    y_center = (y1 + y2) / 2 / img_h
+    width = (x2 - x1) / img_w
+    height = (y2 - y1) / img_h
+    
+    return f"{class_map[cls]} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n"
+
+# Step 4: 处理train/val标签和图片
+
+def process_dataset(label_src, img_src, label_dst, img_dst):
+    for i, txt_file in enumerate(os.listdir(label_src), start=1):
+        if not txt_file.endswith('.txt'):
+            continue
+        src_label_path = os.path.join(label_src, txt_file)
+        src_img_path = os.path.join(img_src, txt_file.replace('.txt', '.jpg'))
+        if not os.path.exists(src_img_path):
+            continue
+
+        # 获取图片尺寸
+        img = Image.open(src_img_path)
+        img_w, img_h = img.size
+
+        # 转换标签
+        yolo_lines = []
+        with open(src_label_path, 'r') as f:
+            for line in f:
+                yolo_line = convert_to_yolo(line, class_map, img_w, img_h)
+                if yolo_line:
+                    yolo_lines.append(yolo_line)
+
+        if len(yolo_lines) == 0:
+            continue  # 标签中没有符合的类别
+
+        # 保存YOLO标签
+        dst_label_path = os.path.join(label_dst, txt_file)
+        with open(dst_label_path, 'w') as f:
+            f.writelines(yolo_lines)
+
+        # 复制图片
+        dst_img_path = os.path.join(img_dst, os.path.basename(src_img_path))
+        shutil.copy(src_img_path, dst_img_path)
+
+        if i % 1000 == 0:
+            print(f"Processed {i} files in dataset {label_src}...")
+
+process_dataset(label_train, img_train, label_train_new, img_train_new)
+process_dataset(label_val, img_val, label_val_new, img_val_new)
+
+
+class_map = {
+    "Dinner plate": 0,
+    "Bowl": 1,
+    "Basin": 2,
+    "Storage box": 3,
+    "Jacket": 4,
+    "Pen": 5,
+    "Carbonated drinks": 6,
+    "Trousers": 7,
+    "Soup ladle": 8,
+    "Disposable cups": 9,
+    "Shampoo": 10,
+    "Mug": 11,
+    "Rice cooker": 12,
+    "Stool": 13,
+    "Trash": 14,
+    "Instant noodles": 15,
+    "Bedding set": 16,
+    "Chopsticks": 17,
+    "Liquor and Spirits": 18,
+    "Adult hat": 19,
+    "Skin care set": 20,
+    "Red wine": 21,
+    "Coffee": 22,
+    "Quick-frozen dumplings": 23,
+    "Microwave Oven": 24,
+    "Toothpaste": 25,
+    "Bath lotion": 26,
+    "Adult shoes": 27,
+    "Pot shovel": 28,
+    "Oats": 29,
+    "Baby washing and nursing supplies": 30,
+    "Baby milk powder": 31,
+    "Dairy": 32,
+    "Adult socks": 33,
+    "Baby tableware": 34,
+    "Sports cup": 35,
+    "Basketball": 36,
+    "Baby Furniture": 37
+}
+
+import os
+import shutil
+from pathlib import Path
+from collections import defaultdict
+
+id_to_name = {v: k for k, v in class_map.items()}
+valid_class_ids = set(class_map.values())
+
+def summarize_class_distribution(label_new_dir, dataset_name="过滤后数据集"):
+    """
+    统计每个类别的标注数量
+    
+    Args:
+        label_new_dir: 标签文件目录
+        dataset_name: 数据集名称
+    
+    Returns:
+        dict: 类别统计字典
+    """
+    class_counts = defaultdict(int)
+    total_annotations = 0
+    total_images = 0
+    
+    # 遍历所有标签文件
+    label_files = list(Path(label_new_dir).glob("*.txt"))
+    
+    for label_file in label_files:
+        with open(label_file, 'r') as f:
+            lines = f.readlines()
+        
+        if lines:  # 如果文件不为空
+            total_images += 1
+            
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+                
+            try:
+                class_id = int(parts[0])
+                if class_id in valid_class_ids:
+                    class_counts[class_id] += 1
+                    total_annotations += 1
+            except ValueError:
+                continue
+    
+    # 转换为易于阅读的格式
+    summary = {
+        "dataset": dataset_name,
+        "total_images": total_images,
+        "total_annotations": total_annotations,
+        "class_distribution": {},
+        "class_counts": dict(class_counts)
+    }
+    
+    # 按类别名称排序
+    for class_id in sorted(class_counts.keys()):
+        class_name = id_to_name.get(class_id, f"Unknown_{class_id}")
+        count = class_counts[class_id]
+        summary["class_distribution"][class_name] = count
+    
+    return summary
+
+
+def summarize_train_val_by_class(train_label_dir, val_label_dir):
+    train_summary = summarize_class_distribution(train_label_dir, "Train")
+    val_summary = summarize_class_distribution(val_label_dir, "Validation")
+
+    all_class_ids = sorted(set(train_summary["class_counts"].keys()) |
+                           set(val_summary["class_counts"].keys()))
+
+    summary = {
+        "train": {
+            "images": train_summary["total_images"],
+            "annotations": train_summary["total_annotations"],
+            "class_counts": train_summary["class_counts"]
+        },
+        "val": {
+            "images": val_summary["total_images"],
+            "annotations": val_summary["total_annotations"],
+            "class_counts": val_summary["class_counts"]
+        },
+        "per_class": []
+    }
+
+    for cid in all_class_ids:
+        summary["per_class"].append({
+            "class_id": cid,
+            "class_name": id_to_name.get(cid, f"Unknown_{cid}"),
+            "train_count": train_summary["class_counts"].get(cid, 0),
+            "val_count": val_summary["class_counts"].get(cid, 0),
+        })
+
+    return summary
+
+
+
+def print_train_val_summary(summary):
+    """
+    打印Train和Validation数据集的统计汇总信息, 包括每个类别的标注数量
+    """
+    print("\n" + "=" * 80)
+    print("Train / Validation 数据集统计汇总")
+    print("=" * 80)
+
+    print("\n[Train]")
+    print(f"图片数量: {summary['train']['images']}")
+    print(f"标注数量: {summary['train']['annotations']}")
+
+    print("\n[Validation]")
+    print(f"图片数量: {summary['val']['images']}")
+    print(f"标注数量: {summary['val']['annotations']}")
+
+    print("\n" + "=" * 80)
+    print(f"{'ID':<5} {'类别名称':<35} {'Train Count':<15} {'Val Count':<15}")
+    print("-" * 80)
+
+    for item in summary["per_class"]:
+        print(
+            f"{item['class_id']:<5} "
+            f"{item['class_name']:<35} "
+            f"{item['train_count']:<15} "
+            f"{item['val_count']:<15}"
+        )
+
+    print("=" * 80 + "\n")
+
+summary = summarize_train_val_by_class(
+    "Locount/labels/Train",
+    "Locount/labels/Val"
+)
+
+print_train_val_summary(summary)
+
